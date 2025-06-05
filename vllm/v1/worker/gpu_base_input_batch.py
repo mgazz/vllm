@@ -144,7 +144,9 @@ class BaseInputBatch(Generic[RequestState]):
         self.num_tokens[req_index] = request.num_tokens
 
         self.num_computed_tokens_cpu[req_index] = request.num_computed_tokens
-        self.block_table.add_row(request.block_ids, req_index)
+        # if the model is attention free there is no need for blocks to be added
+        if len(request.block_ids) > 0:
+            self.block_table.add_row(request.block_ids, req_index)
 
         # Add request lora ID
         if request.lora_request:
