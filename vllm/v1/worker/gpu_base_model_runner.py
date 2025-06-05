@@ -103,6 +103,7 @@ class GPUBaseModelRunner(ABC, LoRAModelRunnerMixin, Generic[InputBatchT,
         self.kv_cache_dtype_str = str(self.kv_cache_dtype).split('.')[-1]
 
         self.is_multimodal_model = model_config.is_multimodal_model
+        self.model_supports_multimodal_raw_input = model_config.model_supports_multimodal_raw_input
         self.max_model_len = model_config.max_model_len
         self.max_num_tokens = scheduler_config.max_num_batched_tokens
         self.max_num_reqs = scheduler_config.max_num_seqs
@@ -268,6 +269,11 @@ class GPUBaseModelRunner(ABC, LoRAModelRunnerMixin, Generic[InputBatchT,
         Returns:
             True if the batch was reordered, False otherwise.
         """
+
+        # nothing to be reordered when the mdoel is attention free
+        if self.model_config.is_attention_free:
+            return False
+
         batch_reordered = self.attn_metadata_builders[0].reorder_batch(
             self.input_batch, scheduler_output)
 
@@ -467,8 +473,9 @@ class GPUBaseModelRunner(ABC, LoRAModelRunnerMixin, Generic[InputBatchT,
         if batch_changed or batch_reordered:
             self.input_batch.refresh()
 
-    def _maybe_add_model_args(self, num_tokens: int, model_kwargs: dict[str,
-                                                                        Any]):
+    def _maybe_add_model_args(self, num_tokens: int, 
+                              model_kwargs: dict[str, Any],
+                              scheduler_output: "SchedulerOutput"=None):
         pass
 
     def _maybe_compute_attn_prefix(
@@ -741,13 +748,14 @@ class GPUBaseModelRunner(ABC, LoRAModelRunnerMixin, Generic[InputBatchT,
             curr_group_outputs = self.model.get_multimodal_embeddings(
                 **batched_mm_inputs)
 
-            sanity_check_mm_encoder_outputs(
-                curr_group_outputs,
-                expected_num_items=len(grouped_mm_inputs),
-            )
+            if curr_group_outputs:
+                sanity_check_mm_encoder_outputs(
+                    curr_group_outputs,
+                    expected_num_items=len(grouped_mm_inputs),
+                )
 
-            for output in curr_group_outputs:
-                encoder_outputs.append(output)
+                for output in curr_group_outputs:
+                    encoder_outputs.append(output)
 
         # Cache the encoder outputs.
         for (req_id, input_id, pos_info), output in zip(
@@ -928,7 +936,8 @@ class GPUBaseModelRunner(ABC, LoRAModelRunnerMixin, Generic[InputBatchT,
             # as input to the multimodal model, even when the input is text.
             input_ids = self.input_ids[:total_num_scheduled_tokens]
             self._maybe_add_model_args(total_num_scheduled_tokens,
-                                       model_kwargs)
+                                       model_kwargs, scheduler_output)
+
             if mm_embeds:
                 inputs_embeds = self.model.get_input_embeddings(
                     input_ids, mm_embeds)
@@ -945,7 +954,7 @@ class GPUBaseModelRunner(ABC, LoRAModelRunnerMixin, Generic[InputBatchT,
             # multimodal models, it is not desirable for performance since
             # then the embedding layer is not included in the CUDA graph.
             input_ids = self.input_ids[:num_input_tokens]
-            self._maybe_add_model_args(num_input_tokens, model_kwargs)
+            self._maybe_add_model_args(num_input_tokens, model_kwargs, scheduler_output)
             inputs_embeds = None
         if self.uses_mrope:
             positions = self.mrope_positions[:, :num_input_tokens]
@@ -973,7 +982,11 @@ class GPUBaseModelRunner(ABC, LoRAModelRunnerMixin, Generic[InputBatchT,
                 positions=positions,
                 intermediate_tensors=intermediate_tensors,
                 inputs_embeds=inputs_embeds,
-                **model_kwargs,
+                **MultiModalKwargs.as_kwargs(
+                    model_kwargs,
+                    dtype=self.model_config.dtype,
+                    device=self.device,
+                )
             )
 
             self.maybe_wait_for_kv_save()
@@ -1194,7 +1207,10 @@ class GPUBaseModelRunner(ABC, LoRAModelRunnerMixin, Generic[InputBatchT,
                                 positions=positions,
                                 intermediate_tensors=intermediate_tensors,
                                 inputs_embeds=inputs_embeds,
-                                **model_kwargs)
+                                **MultiModalKwargs.as_kwargs(
+                                    model_kwargs,
+                                    dtype=self.model_config.dtype,
+                                    device=self.device))
 
             positions = self.positions[:num_tokens].zero_()
             if self.use_aux_hidden_state_outputs:

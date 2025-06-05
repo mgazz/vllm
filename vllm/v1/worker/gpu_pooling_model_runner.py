@@ -11,6 +11,7 @@ from vllm.attention import AttentionType
 from vllm.config import VllmConfig
 from vllm.distributed.parallel_state import get_pp_group
 from vllm.logger import init_logger
+from vllm.multimodal.inputs import MultiModalKwargs
 from vllm.pooling_params import PoolingParams
 from vllm.transformers_utils.tokenizer import AnyTokenizer, MistralTokenizer
 from vllm.transformers_utils.tokenizer_group import init_tokenizer_from_configs
@@ -60,11 +61,34 @@ class GPUPoolingModelRunner(GPUBaseModelRunner[GPUPoolingInputBatch,
                                               device=self.device)
         return self.token_type_ids
 
-    def _maybe_add_model_args(self, num_tokens: int, model_kwargs: dict[str,
-                                                                        Any]):
+    def _add_multimodal_inputs_to_model_args(self, model_kwargs: dict[str, Any],
+                                             scheduler_output: "SchedulerOutput"):
+        # Multi-modal data.
+        if scheduler_output:
+            multi_modal_kwargs_list = []
+            for req in scheduler_output.scheduled_new_reqs:
+                req_mm_inputs = req.mm_inputs
+                if not isinstance(req_mm_inputs, list):
+                    req_mm_inputs = list(req_mm_inputs)
+                multi_modal_kwargs_list.extend(req_mm_inputs)
+            multi_modal_kwargs = MultiModalKwargs.batch(multi_modal_kwargs_list)
+        else:
+            # The only case where SchedulerOtput is None is for a dummy run, let's get some dummy data.
+            dummy_data = self.mm_registry.get_decoder_dummy_data(model_config=self.model_config, seq_len =1)
+            multi_modal_kwargs = MultiModalKwargs.batch([dummy_data.multi_modal_data])
+            
+        model_kwargs.update(multi_modal_kwargs)
+
+    def _maybe_add_model_args(self, num_tokens: int,
+                              model_kwargs: dict[str,Any], 
+                              scheduler_output: "SchedulerOutput"=None):
+        
         if self.supports_token_type_ids:
             model_kwargs["token_type_ids"] =\
                   self.get_token_type_ids()[:num_tokens]
+
+        if self.model_supports_multimodal_raw_input:
+            self._add_multimodal_inputs_to_model_args(model_kwargs, scheduler_output)
 
     def _build_request_state(
             self, new_req_data: NewRequestData) -> PoolingRequestState:
@@ -150,6 +174,8 @@ class GPUPoolingModelRunner(GPUBaseModelRunner[GPUPoolingInputBatch,
         )
 
     def _get_tokenizer(self) -> AnyTokenizer:
+        if self.model_config.skip_tokenizer_init:
+            return None
         tokenizer_group = init_tokenizer_from_configs(
             model_config=self.model_config,
             scheduler_config=self.scheduler_config,
@@ -171,7 +197,7 @@ class GPUPoolingModelRunner(GPUBaseModelRunner[GPUPoolingInputBatch,
             self.supports_token_type_ids = True
 
         tokenizer = self._get_tokenizer()
-        if not isinstance(tokenizer, MistralTokenizer):
+        if tokenizer and not isinstance(tokenizer, MistralTokenizer):
             tok_output = tokenizer(text="foo")
             if "token_type_ids" in tok_output:
                 assert model_supports_token_type_ids
