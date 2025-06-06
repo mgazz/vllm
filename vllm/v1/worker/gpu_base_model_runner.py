@@ -984,7 +984,6 @@ class GPUBaseModelRunner(ABC, LoRAModelRunnerMixin, Generic[InputBatchT,
                 inputs_embeds=inputs_embeds,
                 **MultiModalKwargs.as_kwargs(
                     model_kwargs,
-                    dtype=self.model_config.dtype,
                     device=self.device,
                 )
             )
@@ -1209,7 +1208,6 @@ class GPUBaseModelRunner(ABC, LoRAModelRunnerMixin, Generic[InputBatchT,
                                 inputs_embeds=inputs_embeds,
                                 **MultiModalKwargs.as_kwargs(
                                     model_kwargs,
-                                    dtype=self.model_config.dtype,
                                     device=self.device))
 
             positions = self.positions[:num_tokens].zero_()
