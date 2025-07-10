@@ -139,25 +139,30 @@ class PrithviGeoSpatialMAE(nn.Module, IsAttentionFree,
     def _instantiate_model(self, config: dict) -> Optional[nn.Module]:
 
         # We might be able/need to support different tasks with this same model
-        if config["task_args"]["task"] == "SemanticSegmentationTask":
-            from terratorch.cli_tools import SemanticSegmentationTask
-            task = SemanticSegmentationTask(
-                config["model_args"],
-                config["task_args"]["model_factory"],
-                loss=config["task_args"]["loss"],
-                lr=config["task_args"]["lr"],
-                ignore_index=config["task_args"]["ignore_index"],
-                optimizer=config["task_args"]["optimizer"],
-                optimizer_hparams=config["optimizer_params"],
-                scheduler=config["task_args"]["scheduler"],
-                scheduler_hparams=config["scheduler_params"],
-                plot_on_val=config["task_args"]["plot_on_val"],
-                freeze_decoder=config["task_args"]["freeze_decoder"],
-                freeze_backbone=config["task_args"]["freeze_backbone"])
-
-            return task.model
-        else:
-            return None
+        from terratorch.cli_tools import SemanticSegmentationTask
+        task = SemanticSegmentationTask(
+                optimizer=config["optimizer"]["class_path"],
+                optimizer_hparams=config["optimizer"]["init_args"],
+                scheduler=config["lr_scheduler"]["class_path"],
+                scheduler_hparams=config["lr_scheduler"]["init_args"],
+                **config["model"]["init_args"])
+        #if config["task_args"]["task"] == "SemanticSegmentationTask":
+            #task = SemanticSegmentationTask(
+            #    config["model_args"],
+            #    config["task_args"]["model_factory"],
+            #    loss=config["task_args"]["loss"],
+            #    lr=config["task_args"]["lr"],
+            #    ignore_index=config["task_args"]["ignore_index"],
+            #    optimizer=config["task_args"]["optimizer"],
+            #    optimizer_hparams=config["optimizer_params"],
+            #    scheduler=config["task_args"]["scheduler"],
+            #    scheduler_hparams=config["scheduler_params"],
+            #    plot_on_val=config["task_args"]["plot_on_val"],
+            #    freeze_decoder=config["task_args"]["freeze_decoder"],
+            #    freeze_backbone=config["task_args"]["freeze_backbone"])
+        return task.model
+        #else:
+        #    return None
 
     def __init__(self, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
