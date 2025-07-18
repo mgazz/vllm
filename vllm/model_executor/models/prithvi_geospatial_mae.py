@@ -17,6 +17,7 @@
 # limitations under the License.
 """Inference-only IBM/NASA Prithvi Geospatial model."""
 from collections.abc import Iterable, Mapping, Sequence
+import importlib
 from typing import Optional, Union
 
 import torch
@@ -40,7 +41,7 @@ from vllm.multimodal.processing import (BaseMultiModalProcessor,
 from vllm.multimodal.profiling import BaseDummyInputsBuilder
 from vllm.sequence import (IntermediateTensors, PoolerOutput,
                            PoolingSequenceGroupOutput)
-
+from terratorch.models.wxc_model_factory import WxCModuleWrapper
 
 class PrithviGeoSpatialMAEProcessingInfo(BaseProcessingInfo):
 
@@ -139,33 +140,126 @@ class PrithviGeoSpatialMAE(nn.Module, IsAttentionFree,
     def _instantiate_model(self, config: dict) -> Optional[nn.Module]:
 
         # We might be able/need to support different tasks with this same model
-        from terratorch.cli_tools import SemanticSegmentationTask
-        task = SemanticSegmentationTask(
-                optimizer=config["optimizer"]["class_path"],
-                optimizer_hparams=config["optimizer"]["init_args"],
-                scheduler=config["lr_scheduler"]["class_path"],
-                scheduler_hparams=config["lr_scheduler"]["init_args"],
-                **config["model"]["init_args"])
-        #if config["task_args"]["task"] == "SemanticSegmentationTask":
-            #task = SemanticSegmentationTask(
-            #    config["model_args"],
-            #    config["task_args"]["model_factory"],
-            #    loss=config["task_args"]["loss"],
-            #    lr=config["task_args"]["lr"],
-            #    ignore_index=config["task_args"]["ignore_index"],
-            #    optimizer=config["task_args"]["optimizer"],
-            #    optimizer_hparams=config["optimizer_params"],
-            #    scheduler=config["task_args"]["scheduler"],
-            #    scheduler_hparams=config["scheduler_params"],
-            #    plot_on_val=config["task_args"]["plot_on_val"],
-            #    freeze_decoder=config["task_args"]["freeze_decoder"],
-            #    freeze_backbone=config["task_args"]["freeze_backbone"])
+        #from terratorch.cli_tools import SemanticSegmentationTask
+
+        supported_tasks =  ['ClassificationTask', 
+                            'MultiLabelClassificationTask',
+                            'PixelwiseRegressionTask',
+                            'ReconstructionTask',
+                            'SemanticSegmentationTask',
+                            'TerraTorchTask',
+                            'WxCDownscalingTask',
+                            'WxCTask']
+
+        supported = False
+        for t in supported_tasks:
+            if t in config["model"]["class_path"]:
+                supported = True
+        if not supported:
+            raise Exception(f"Requested task {config["model"]["class_path"]} " \
+                            "is not supported" )
+
+        terratorch_tasks = importlib.import_module("terratorch.tasks")
+
+        task_class_name = config["model"]["class_path"].split(".")[-1]
+        task_class = getattr(terratorch_tasks,task_class_name) 
+        
+        
+        #from terratorch.tasks import WxCDownscalingTask 
+        if task_class_name == "WxCDownscalingTask":
+
+            from granitewxc.utils.config import ExperimentConfig
+
+            #mask_unit_size = config["model"]["init_args"]["model_args"]["mask_unit_size"]
+            #experiment_config = ExperimentConfig.from_dict(config["model"]["init_args"]["model_config"])
+                #mask_unit_size = config["model"]["init_args"]["model_args"]["mask_unit_size"],
+                #**config["model"]["init_args"]["model_config"])
+                #**config["model"]["init_args"]["model_config"])
+            experiment_config = ExperimentConfig.from_dict(config)
+
+            from huggingface_hub import hf_hub_download
+            import glob
+
+            files = glob.glob("climatology/*")
+
+            if not len(files):
+                # TODO: read from confi
+                hf_hub_download(
+                    repo_id="Prithvi-WxC/prithvi.wxc.2300m.v1",
+                    filename=f"climatology/anomaly_variance_surface.nc",
+                    local_dir=".",
+                )
+
+                hf_hub_download(
+                    repo_id="Prithvi-WxC/prithvi.wxc.2300m.v1",
+                    filename=f"climatology/anomaly_variance_vertical.nc",
+                    local_dir=".",
+                )
+
+                hf_hub_download(
+                    repo_id="Prithvi-WxC/prithvi.wxc.2300m.v1",
+                    filename=f"climatology/musigma_surface.nc",
+                    local_dir=".",
+                )
+
+                hf_hub_download(
+                    repo_id="Prithvi-WxC/prithvi.wxc.2300m.v1",
+                    filename=f"climatology/musigma_vertical.nc",
+                    local_dir=".",
+                )
+
+            #config["model"]["init_args"]["model_config"]= experiment_config
+            task = task_class(optimizer=config["optimizer"]["class_path"],
+                              optimizer_hparams=config["optimizer"]["init_args"],
+                              scheduler=config["lr_scheduler"]["class_path"],
+                              scheduler_hparams=config["lr_scheduler"]["init_args"],
+                              model_config=experiment_config,
+                              model_factory = 'WxCModelFactory',
+                              model_args=config["model"]["init_args"]["model_args"],
+                              extra_kwargs = config["model"]["init_args"]["extra_kwargs"])
+
+            from granitewxc.utils.data import _get_transforms
+            from terratorch.datamodules.merra2_downscale import Merra2DownscaleNonGeoDataModule
+
+            datamodule = Merra2DownscaleNonGeoDataModule(
+                data_path_surface = experiment_config.data.data_path_surface,
+                data_path_vertical = experiment_config.data.data_path_vertical,
+                climatology_path_surface = experiment_config.data.climatology_path_surface,
+                climatology_path_vertical = experiment_config.data.climatology_path_vertical,
+                input_surface_vars = experiment_config.data.input_surface_vars,
+                input_static_surface_vars = experiment_config.data.input_static_surface_vars,
+                input_vertical_vars = experiment_config.data.input_vertical_vars,
+                input_levels = experiment_config.data.input_levels,
+                n_input_timestamps = experiment_config.data.n_input_timestamps,
+                output_vars=experiment_config.data.output_vars,
+                time_range=('2020-01-01', '2020-01-02'),
+                transforms=_get_transforms(experiment_config),)
+            datamodule.setup('predict')
+            first_element = datamodule.predict_dataloader().dataset[0]
+            #print(datamodule)
+
+            #task = task_class(
+            #        optimizer=config["optimizer"]["class_path"],
+            #        optimizer_hparams=config["optimizer"]["init_args"],
+            #        scheduler=config["lr_scheduler"]["class_path"],
+            #        scheduler_hparams=config["lr_scheduler"]["init_args"],
+            #        model_config = experiment_config)
+            #        #extra_kwargs = config["model"]["init_args"]["extra_kwargs"],
+        else:
+
+            task = task_class(
+                    optimizer=config["optimizer"]["class_path"],
+                    optimizer_hparams=config["optimizer"]["init_args"],
+                    scheduler=config["lr_scheduler"]["class_path"],
+                    scheduler_hparams=config["lr_scheduler"]["init_args"],
+                    **config["model"]["init_args"])
         return task.model
         #else:
         #    return None
 
     def __init__(self, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
+        self.terratorch_config = vllm_config.model_config.hf_config.to_dict()["pretrained_cfg"]
 
         # the actual model is dynamically instantiated using terratorch
         # allowing us to perform changes to the model architecture
@@ -215,7 +309,33 @@ class PrithviGeoSpatialMAE(nn.Module, IsAttentionFree,
 
         pixel_values, location_coords = (
             self._parse_and_validate_multimodal_data(**kwargs))
-        model_output = self.model(pixel_values,
+        if isinstance(self.model,WxCModuleWrapper):
+            from granitewxc.utils.config import ExperimentConfig
+
+            experiment_config = ExperimentConfig.from_dict(self.terratorch_config)
+
+
+            from granitewxc.utils.data import _get_transforms
+            from terratorch.datamodules.merra2_downscale import Merra2DownscaleNonGeoDataModule
+
+            datamodule = Merra2DownscaleNonGeoDataModule(
+                data_path_surface = experiment_config.data.data_path_surface,
+                data_path_vertical = experiment_config.data.data_path_vertical,
+                climatology_path_surface = experiment_config.data.climatology_path_surface,
+                climatology_path_vertical = experiment_config.data.climatology_path_vertical,
+                input_surface_vars = experiment_config.data.input_surface_vars,
+                input_static_surface_vars = experiment_config.data.input_static_surface_vars,
+                input_vertical_vars = experiment_config.data.input_vertical_vars,
+                input_levels = experiment_config.data.input_levels,
+                n_input_timestamps = experiment_config.data.n_input_timestamps,
+                output_vars=experiment_config.data.output_vars,
+                time_range=('2020-01-01', '2020-01-02'),
+                transforms=_get_transforms(experiment_config),)
+            datamodule.setup('predict')
+            first_element = datamodule.predict_dataloader().dataset[0]
+            model_output = self.model(wxc_input)
+        else:
+            model_output = self.model(pixel_values,
                                   location_coords=location_coords)
 
         return model_output.output
@@ -236,28 +356,31 @@ class PrithviGeoSpatialMAE(nn.Module, IsAttentionFree,
         model_buffers = dict(self.named_buffers())
         loaded_buffers = []
         for key, value in weights:
-            if key == "state_dict":
-                weights_to_parse = value
-                for name, weight in weights_to_parse.items():
-                    if "pos_embed" in name:
-                        continue
+            if type(value) is dict:
+                if key == "state_dict":
+                    weights_to_parse = value
+                    for name, weight in weights_to_parse.items():
+                        if "pos_embed" in name:
+                            continue
 
-                    if "_timm_module." in name:
-                        name = name.replace("_timm_module.", "")
-
-                    # this model requires a couple of buffers to be loaded
-                    # that are not loadable with the AutoWeightsLoader
-                    if name in model_buffers:
                         if "_timm_module." in name:
                             name = name.replace("_timm_module.", "")
-                        buffer = model_buffers[name]
-                        weight_loader = getattr(buffer, "weight_loader",
-                                                default_weight_loader)
-                        weight_loader(buffer, weight)
-                        loaded_buffers.append(name)
-                    else:
-                        params_list.append((name, weight))
-                break
+
+                        # this model requires a couple of buffers to be loaded
+                        # that are not loadable with the AutoWeightsLoader
+                        if name in model_buffers:
+                            if "_timm_module." in name:
+                                name = name.replace("_timm_module.", "")
+                            buffer = model_buffers[name]
+                            weight_loader = getattr(buffer, "weight_loader",
+                                                    default_weight_loader)
+                            weight_loader(buffer, weight)
+                            loaded_buffers.append(name)
+                        else:
+                            params_list.append((name, weight))
+                    break
+            else:
+                params_list.append((f"model.module.{key}",value))
 
         # Load the remaining model parameters
         loader = AutoWeightsLoader(self)
