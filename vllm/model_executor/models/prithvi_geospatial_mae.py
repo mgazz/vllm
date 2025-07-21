@@ -24,6 +24,8 @@ import torch
 import torch.nn as nn
 from transformers import BatchFeature
 
+from terratorch.models.model import AuxiliaryHead
+
 from vllm.config import VllmConfig
 from vllm.model_executor.layers.pooler import (AllPool, PoolerHead,
                                                PoolerIdentity, SimplePooler)
@@ -194,6 +196,11 @@ class PrithviGeoSpatialMAE(nn.Module, IsAttentionFree,
                               model_args=config["model"]["init_args"]["model_args"],
                               extra_kwargs = config["model"]["init_args"]["extra_kwargs"])
         else:
+            if 'aux_heads' in config["model"]["init_args"]:
+                aux_heads_list = []
+                for head in config["model"]["init_args"]['aux_heads']:
+                    aux_heads_list.append(AuxiliaryHead(**head))
+                config["model"]["init_args"]["aux_heads"]=aux_heads_list
 
             task = task_class(
                     optimizer=config["optimizer"]["class_path"],
