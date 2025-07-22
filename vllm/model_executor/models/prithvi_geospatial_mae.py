@@ -17,7 +17,9 @@
 # limitations under the License.
 """Inference-only IBM/NASA Prithvi Geospatial model."""
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Optional, Union
+from typing import Optional, Union, OrderedDict
+from terratorch.models.model import AuxiliaryHead
+import importlib
 
 import torch
 import torch.nn as nn
@@ -143,24 +145,56 @@ class PrithviGeoSpatialMAE(nn.Module, IsAttentionFree,
 
     def _instantiate_model(self, config: dict) -> Optional[nn.Module]:
 
-        # We might be able/need to support different tasks with this same model
-        if config["task_args"]["task"] == "SemanticSegmentationTask":
-            from terratorch.cli_tools import SemanticSegmentationTask
-            task = SemanticSegmentationTask(
-                config["model_args"],
-                config["task_args"]["model_factory"],
-                loss=config["task_args"]["loss"],
-                lr=config["task_args"]["lr"],
-                ignore_index=config["task_args"]["ignore_index"],
-                optimizer=config["task_args"]["optimizer"],
-                optimizer_hparams=config["optimizer_params"],
-                scheduler=config["task_args"]["scheduler"],
-                scheduler_hparams=config["scheduler_params"],
-                plot_on_val=config["task_args"]["plot_on_val"],
-                freeze_decoder=config["task_args"]["freeze_decoder"],
-                freeze_backbone=config["task_args"]["freeze_backbone"])
+        supported_tasks =  ['SemanticSegmentationTask','WxCDownscalingTask']
+
+        supported = False
+        for t in supported_tasks:
+            if t in config["model"]["class_path"]:
+                supported = True
+        if not supported:
+            raise Exception(f"Requested task {config["model"]["class_path"]} " \
+                            "is not supported" )
+
+        terratorch_tasks = importlib.import_module("terratorch.tasks")
+
+        task_class_name = config["model"]["class_path"].split(".")[-1]
+        task_class = getattr(terratorch_tasks,task_class_name)
+
+        if task_class_name == "WxCDownscalingTask":
+            from granitewxc.utils.config import ExperimentConfig
+            experiment_config = ExperimentConfig.from_dict(config)
+            task = task_class(optimizer=config["optimizer"]["class_path"],
+                              optimizer_hparams=config["optimizer"]["init_args"],
+                              scheduler=config["lr_scheduler"]["class_path"],
+                              scheduler_hparams=config["lr_scheduler"]["init_args"],
+                              model_config=experiment_config,
+                              model_factory = 'WxCModelFactory',
+                              model_args=config["model"]["init_args"]["model_args"],
+                              extra_kwargs = config["model"]["init_args"]["extra_kwargs"])
+            return task.model
+        
+        elif task_class_name== 'SemanticSegmentationTask':
+            if 'aux_heads' in config["model"]["init_args"]:
+                aux_heads_list = []
+                for head in config["model"]["init_args"]['aux_heads']:
+                    aux_heads_list.append(AuxiliaryHead(**head))
+                config["model"]["init_args"]["aux_heads"]=aux_heads_list
+
+            task = task_class(
+                    optimizer=config["optimizer"]["class_path"],
+                    optimizer_hparams=config["optimizer"]["init_args"],
+                    scheduler=config["lr_scheduler"]["class_path"],
+                    scheduler_hparams=config["lr_scheduler"]["init_args"],
+                    **config["model"]["init_args"])
+
 
             return task.model
+
+
+
+            
+
+        
         else:
             return None
 
@@ -230,28 +264,33 @@ class PrithviGeoSpatialMAE(nn.Module, IsAttentionFree,
         model_buffers = dict(self.named_buffers())
         loaded_buffers = []
         for key, value in weights:
-            if key == "state_dict":
-                weights_to_parse = value
-                for name, weight in weights_to_parse.items():
-                    if "pos_embed" in name:
-                        continue
+            # dict to handle SemanticSegmentationTask and OrderedDict to handle PixelwiseRegressionTask 
+            if type(value) is dict or isinstance(value,OrderedDict):
+               if key == "state_dict":
+                    weights_to_parse = value
+                    for name, weight in weights_to_parse.items():
+                        if "pos_embed" in name:
+                            continue
 
-                    if "_timm_module." in name:
-                        name = name.replace("_timm_module.", "")
-
-                    # this model requires a couple of buffers to be loaded
-                    # that are not loadable with the AutoWeightsLoader
-                    if name in model_buffers:
                         if "_timm_module." in name:
                             name = name.replace("_timm_module.", "")
-                        buffer = model_buffers[name]
-                        weight_loader = getattr(buffer, "weight_loader",
-                                                default_weight_loader)
-                        weight_loader(buffer, weight)
-                        loaded_buffers.append(name)
-                    else:
-                        params_list.append((name, weight))
-                break
+
+                        # this model requires a couple of buffers to be loaded
+                        # that are not loadable with the AutoWeightsLoader
+                        if name in model_buffers:
+                            if "_timm_module." in name:
+                                name = name.replace("_timm_module.", "")
+                            buffer = model_buffers[name]
+                            weight_loader = getattr(buffer, "weight_loader",
+                                                    default_weight_loader)
+                            weight_loader(buffer, weight)
+                            loaded_buffers.append(name)
+                        else:
+                            params_list.append((name, weight))
+                    break
+
+            elif isinstance(value,torch.Tensor): # To handle WxCDownscalingTask
+                params_list.append((f"model.module.{key}",value))
 
         # Load the remaining model parameters
         loader = AutoWeightsLoader(self)
