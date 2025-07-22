@@ -1674,6 +1674,9 @@ class CacheConfig:
     num_cpu_blocks: Optional[int] = field(default=None, init=False)
     """The number of blocks to allocate for CPU memory."""
 
+    skip_compile_or_warmup: bool = False
+    """ This enables the warm up for sizes that are not in cudagraph capture sizes"""
+
     def compute_hash(self) -> str:
         """
         WARNING: Whenever a new field is added to this config,

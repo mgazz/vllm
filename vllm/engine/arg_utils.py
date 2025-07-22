@@ -427,6 +427,8 @@ class EngineArgs:
 
     calculate_kv_scales: bool = CacheConfig.calculate_kv_scales
 
+    skip_compile_or_warmup: bool = CacheConfig.skip_compile_or_warmup
+
     additional_config: dict[str, Any] = \
         get_field(VllmConfig, "additional_config")
     reasoning_parser: str = DecodingConfig.reasoning_backend
@@ -679,6 +681,8 @@ class EngineArgs:
                                  **cache_kwargs["cpu_offload_gb"])
         cache_group.add_argument("--calculate-kv-scales",
                                  **cache_kwargs["calculate_kv_scales"])
+        cache_group.add_argument("--skip-compile-or-warmup",
+                                 **cache_kwargs["skip_compile_or_warmup"])
 
         # Multimodal related configs
         multimodal_kwargs = get_kwargs(MultiModalConfig)
@@ -1078,6 +1082,7 @@ class EngineArgs:
             prefix_caching_hash_algo=self.prefix_caching_hash_algo,
             cpu_offload_gb=self.cpu_offload_gb,
             calculate_kv_scales=self.calculate_kv_scales,
+            skip_compile_or_warmup=self.skip_compile_or_warmup,
         )
 
         # Get the current placement group if Ray is initialized and
