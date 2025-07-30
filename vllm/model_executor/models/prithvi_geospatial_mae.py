@@ -22,6 +22,8 @@ from typing import Optional, Union
 
 import torch
 import torch.nn as nn
+from terratorch.vllm import (DummyDataGenerator, InferenceRunner,
+                             MultiModalDataGenerator)
 from transformers import BatchFeature
 
 from vllm.config import VllmConfig
@@ -39,7 +41,8 @@ from vllm.multimodal.inputs import (MultiModalDataDict, MultiModalFieldConfig,
                                     MultiModalSharedField, PlaceholderRange)
 from vllm.multimodal.parse import MultiModalDataItems
 from vllm.multimodal.processing import (BaseMultiModalProcessor,
-                                        BaseProcessingInfo, PromptUpdate)
+                                        BaseProcessingInfo, ProcessingCache,
+                                        PromptUpdate)
 from vllm.multimodal.profiling import BaseDummyInputsBuilder
 from vllm.sequence import IntermediateTensors
 
@@ -53,6 +56,12 @@ class PrithviGeoSpatialMAEProcessingInfo(BaseProcessingInfo):
 class PrithviGeoSpatialMAEInputBuilder(
         BaseDummyInputsBuilder[PrithviGeoSpatialMAEProcessingInfo]):
 
+    def __init__(self, info: PrithviGeoSpatialMAEProcessingInfo):
+        super().__init__(info)
+        print("initialising input builder")
+        self.dummy_data_generator = DummyDataGenerator(
+            self.info.get_hf_config().to_dict()["pretrained_cfg"])
+
     def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:
         return ""
 
@@ -64,26 +73,34 @@ class PrithviGeoSpatialMAEInputBuilder(
         # This model input is fixed and is in the form of a torch Tensor.
         # The size of pixel_values might change in the cases where we resize
         # the input but never exceeds the dimensions below.
-        return {
-            "pixel_values": torch.full((6, 512, 512), 1.0,
-                                       dtype=torch.float16),
-            "location_coords": torch.full((1, 2), 1.0, dtype=torch.float16),
-        }
+        return self.dummy_data_generator.get_dummy_mm_data()
 
 
 class PrithviGeoSpatialMAEMultiModalProcessor(BaseMultiModalProcessor):
+
+    def __init__(self,
+                 info: PrithviGeoSpatialMAEProcessingInfo,
+                 dummy_inputs:
+                 "BaseDummyInputsBuilder[PrithviGeoSpatialMAEProcessingInfo]",
+                 *,
+                 cache: Optional[ProcessingCache] = None) -> None:
+
+        super().__init__(info=info, dummy_inputs=dummy_inputs, cache=cache)
+        print("initialising mm data processor")
+        self.mm_data_generator = MultiModalDataGenerator(
+            self.info.get_hf_config().to_dict()["pretrained_cfg"])
 
     def _get_mm_fields_config(
         self,
         hf_inputs: BatchFeature,
         hf_processor_mm_kwargs: Mapping[str, object],
     ) -> Mapping[str, MultiModalFieldConfig]:
-        return dict(
-            pixel_values=MultiModalFieldConfig.shared(batch_size=1,
-                                                      modality="image"),
-            location_coords=MultiModalFieldConfig.shared(batch_size=1,
-                                                         modality="image"),
-        )
+        fields = self.mm_data_processor._get_mm_fields_config()
+        mm_fields_config = {}
+        for field_name, field_modality in fields.item():
+            mm_fields_config[field_name] = MultiModalFieldConfig.shared(
+                batch_size=1, modality=field_modality)
+        return mm_fields_config
 
     def _get_prompt_updates(
         self,
@@ -162,66 +179,19 @@ class PrithviGeoSpatialMAE(nn.Module, IsAttentionFree,
 
         raise ValueError("Only image modality is supported")
 
-    def _instantiate_model(self, config: dict) -> Optional[nn.Module]:
-        # We might be able/need to support different tasks with this same model
-        if config["task_args"]["task"] == "SemanticSegmentationTask":
-            from terratorch.cli_tools import SemanticSegmentationTask
-
-            task = SemanticSegmentationTask(
-                config["model_args"],
-                config["task_args"]["model_factory"],
-                loss=config["task_args"]["loss"],
-                lr=config["task_args"]["lr"],
-                ignore_index=config["task_args"]["ignore_index"],
-                optimizer=config["task_args"]["optimizer"],
-                optimizer_hparams=config["optimizer_params"],
-                scheduler=config["task_args"]["scheduler"],
-                scheduler_hparams=config["scheduler_params"],
-                plot_on_val=config["task_args"]["plot_on_val"],
-                freeze_decoder=config["task_args"]["freeze_decoder"],
-                freeze_backbone=config["task_args"]["freeze_backbone"],
-            )
-
-            return task.model
-        else:
-            return None
-
     def __init__(self, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
 
-        # the actual model is dynamically instantiated using terratorch
-        # allowing us to perform changes to the model architecture
-        # at startup time (e.g., change the model decoder class.)
-        self.model = self._instantiate_model(
-            vllm_config.model_config.hf_config.to_dict()["pretrained_cfg"])
-        if self.model is None:
-            raise ValueError(
-                "Unsupported task. "
-                "Only SemanticSegmentationTask is supported for now "
-                "by PrithviGeospatialMAE.")
+        config = vllm_config.model_config.hf_config.to_dict()["pretrained_cfg"]
+
+        self.inference_runner = InferenceRunner(config)
+        self.model = self.inference_runner.task.model
 
         pooler_config = vllm_config.model_config.pooler_config
         assert pooler_config is not None
 
         self.pooler = DispatchPooler(
             {"encode": Pooler.for_encode(pooler_config)}, )
-
-    def _parse_and_validate_multimodal_data(
-            self, **kwargs) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
-        pixel_values = kwargs.pop("pixel_values", None)
-        if not isinstance(pixel_values, torch.Tensor):
-            raise ValueError(f"Incorrect type of pixel_values. "
-                             f"Got type: {type(pixel_values)}")
-
-        location_coords = kwargs.pop("location_coords", None)
-        if not isinstance(location_coords, torch.Tensor):
-            raise ValueError(f"Incorrect type of location_coords. "
-                             f"Got type: {type(location_coords)}")
-        location_coords = torch.unbind(location_coords, dim=0)[0]
-        if location_coords.shape == torch.Size([0]):
-            location_coords = None
-
-        return pixel_values, location_coords
 
     def get_input_embeddings(
         self,
@@ -242,15 +212,15 @@ class PrithviGeoSpatialMAE(nn.Module, IsAttentionFree,
         inputs_embeds: Optional[torch.Tensor] = None,
         **kwargs: object,
     ):
-        pixel_values, location_coords = (
-            self._parse_and_validate_multimodal_data(**kwargs))
-        model_output = self.model(pixel_values,
-                                  location_coords=location_coords)
+        model_output = self.inference_runner.forward(**kwargs)
 
         return model_output.output
 
     def load_weights(self, weights: Iterable[tuple[str,
                                                    torch.Tensor]]) -> set[str]:
+        #(params_list,loaded_buffers) = self.inference_runner.load_weights(
+        # dict(weights),dict(self.named_buffers()))
+
         params_list = []
         model_buffers = dict(self.named_buffers())
         loaded_buffers = []
@@ -277,7 +247,6 @@ class PrithviGeoSpatialMAE(nn.Module, IsAttentionFree,
                     else:
                         params_list.append((name, weight))
                 break
-
         # Load the remaining model parameters
         loader = AutoWeightsLoader(self)
         autoloaded_weights = loader.load_weights(params_list)
