@@ -17,6 +17,7 @@
 # limitations under the License.
 """Inference-only IBM/NASA Prithvi Geospatial model."""
 
+from collections import OrderedDict
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Optional, Union
 
@@ -57,7 +58,6 @@ class PrithviGeoSpatialMAEInputBuilder(
 
     def __init__(self, info: PrithviGeoSpatialMAEProcessingInfo):
         super().__init__(info)
-        print("initialising input builder")
         self.dummy_data_generator = DummyDataGenerator(
             self.info.get_hf_config().to_dict()["pretrained_cfg"])
 
@@ -85,7 +85,6 @@ class PrithviGeoSpatialMAEMultiModalProcessor(BaseMultiModalProcessor):
                  cache: Optional[ProcessingCache] = None) -> None:
 
         super().__init__(info=info, dummy_inputs=dummy_inputs, cache=cache)
-        print("initialising mm data processor")
         self.mm_data_generator = MultiModalDataGenerator(
             self.info.get_hf_config().to_dict()["pretrained_cfg"])
 
@@ -183,7 +182,7 @@ class PrithviGeoSpatialMAE(nn.Module, IsAttentionFree,
         config = vllm_config.model_config.hf_config.to_dict()["pretrained_cfg"]
 
         self.inference_runner = InferenceRunner(config)
-        self.model = self.inference_runner.task.model
+        self.model = self.inference_runner.model
 
         self.pooler = SimplePooler(AllPool(), PoolerHead(PoolerIdentity()))
 
@@ -212,35 +211,39 @@ class PrithviGeoSpatialMAE(nn.Module, IsAttentionFree,
 
     def load_weights(self, weights: Iterable[tuple[str,
                                                    torch.Tensor]]) -> set[str]:
-        #(params_list,loaded_buffers) = self.inference_runner.load_weights(
-        # dict(weights),dict(self.named_buffers()))
-
         params_list = []
         model_buffers = dict(self.named_buffers())
         loaded_buffers = []
         for key, value in weights:
-            if key == "state_dict":
-                weights_to_parse = value
-                for name, weight in weights_to_parse.items():
-                    if "pos_embed" in name:
-                        continue
+            # dict to handle SemanticSegmentationTask and OrderedDict to handle PixelwiseRegressionTask
+            if type(value) is dict or isinstance(value, OrderedDict):
+                if key == "state_dict":
+                    weights_to_parse = value
+                    for name, weight in weights_to_parse.items():
+                        if "pos_embed" in name:
+                            continue
 
-                    if "_timm_module." in name:
-                        name = name.replace("_timm_module.", "")
-
-                    # this model requires a couple of buffers to be loaded
-                    # that are not loadable with the AutoWeightsLoader
-                    if name in model_buffers:
                         if "_timm_module." in name:
                             name = name.replace("_timm_module.", "")
-                        buffer = model_buffers[name]
-                        weight_loader = getattr(buffer, "weight_loader",
-                                                default_weight_loader)
-                        weight_loader(buffer, weight)
-                        loaded_buffers.append(name)
-                    else:
-                        params_list.append((name, weight))
-                break
+
+                        # this model requires a couple of buffers to be loaded
+                        # that are not loadable with the AutoWeightsLoader
+                        if name in model_buffers:
+                            if "_timm_module." in name:
+                                name = name.replace("_timm_module.", "")
+                            buffer = model_buffers[name]
+                            weight_loader = getattr(buffer, "weight_loader",
+                                                    default_weight_loader)
+                            weight_loader(buffer, weight)
+                            loaded_buffers.append(name)
+                        else:
+                            params_list.append((name, weight))
+                    break
+
+            elif isinstance(value,
+                            torch.Tensor):  # To handle WxCDownscalingTask
+                params_list.append((f"model.{key}", value))
+
         # Load the remaining model parameters
         loader = AutoWeightsLoader(self)
         autoloaded_weights = loader.load_weights(params_list)
