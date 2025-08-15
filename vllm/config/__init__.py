@@ -169,6 +169,7 @@ class ModelImpl(str, enum.Enum):
     AUTO = "auto"
     VLLM = "vllm"
     TRANSFORMERS = "transformers"
+    TERRATORCH = "terratorch"
 
 
 def get_attr_docs(cls: type[Any]) -> dict[str, str]:

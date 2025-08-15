@@ -618,6 +618,9 @@ class _ModelRegistry:
                 model_info = self._try_inspect_model_cls(arch)
                 if model_info is not None:
                     return (model_info, arch)
+        elif model_config.model_impl == ModelImpl.TERRATORCH:
+            model_info = self._try_inspect_model_cls("Terratorch")
+            return (model_info, "Terratorch")
 
         # Fallback to transformers impl (after resolving convert_type)
         if (all(arch not in self.models for arch in architectures)
@@ -666,6 +669,11 @@ class _ModelRegistry:
                 model_cls = self._try_load_model_cls(arch)
                 if model_cls is not None:
                     return (model_cls, arch)
+        if model_config.model_impl == ModelImpl.TERRATORCH:
+            arch = "Terratorch"
+            model_cls = self._try_load_model_cls(arch)
+            if model_cls is not None:
+                return (model_cls, arch)
 
         # Fallback to transformers impl (after resolving convert_type)
         if (all(arch not in self.models for arch in architectures)
