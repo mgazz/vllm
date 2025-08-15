@@ -48,16 +48,15 @@ from vllm.multimodal.profiling import BaseDummyInputsBuilder
 from vllm.sequence import IntermediateTensors
 
 
-class PrithviGeoSpatialMAEProcessingInfo(BaseProcessingInfo):
+class TerratorchProcessingInfo(BaseProcessingInfo):
 
     def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
         return {"image": None}
 
 
-class PrithviGeoSpatialMAEInputBuilder(
-        BaseDummyInputsBuilder[PrithviGeoSpatialMAEProcessingInfo]):
+class TerratorchInputBuilder(BaseDummyInputsBuilder[TerratorchProcessingInfo]):
 
-    def __init__(self, info: PrithviGeoSpatialMAEProcessingInfo):
+    def __init__(self, info: TerratorchProcessingInfo):
         super().__init__(info)
         self.dummy_data_generator = DummyDataGenerator(
             self.info.get_hf_config().to_dict()["pretrained_cfg"])
@@ -76,14 +75,14 @@ class PrithviGeoSpatialMAEInputBuilder(
         return self.dummy_data_generator.get_dummy_mm_data()
 
 
-class PrithviGeoSpatialMAEMultiModalProcessor(BaseMultiModalProcessor):
+class TerratorchMultiModalProcessor(BaseMultiModalProcessor):
 
-    def __init__(self,
-                 info: PrithviGeoSpatialMAEProcessingInfo,
-                 dummy_inputs:
-                 "BaseDummyInputsBuilder[PrithviGeoSpatialMAEProcessingInfo]",
-                 *,
-                 cache: Optional[ProcessingCache] = None) -> None:
+    def __init__(
+            self,
+            info: TerratorchProcessingInfo,
+            dummy_inputs: "BaseDummyInputsBuilder[TerratorchProcessingInfo]",
+            *,
+            cache: Optional[ProcessingCache] = None) -> None:
 
         super().__init__(info=info, dummy_inputs=dummy_inputs, cache=cache)
         self.mm_data_generator = MultiModalDataGenerator(
@@ -161,12 +160,11 @@ class PrithviGeoSpatialMAEMultiModalProcessor(BaseMultiModalProcessor):
 
 @default_pooling_type("All")
 @MULTIMODAL_REGISTRY.register_processor(
-    PrithviGeoSpatialMAEMultiModalProcessor,
-    info=PrithviGeoSpatialMAEProcessingInfo,
-    dummy_inputs=PrithviGeoSpatialMAEInputBuilder,
+    TerratorchMultiModalProcessor,
+    info=TerratorchProcessingInfo,
+    dummy_inputs=TerratorchInputBuilder,
 )
-class PrithviGeoSpatialMAE(nn.Module, IsAttentionFree,
-                           SupportsMultiModalWithRawInput):
+class Terratorch(nn.Module, IsAttentionFree, SupportsMultiModalWithRawInput):
     """Prithvi Masked Autoencoder"""
 
     is_pooling_model = True
@@ -221,7 +219,6 @@ class PrithviGeoSpatialMAE(nn.Module, IsAttentionFree,
         model_buffers = dict(self.named_buffers())
         loaded_buffers = []
         for key, value in weights:
-            # dict to handle SemanticSegmentationTask and OrderedDict to handle PixelwiseRegressionTask
             if type(value) is dict or isinstance(value, OrderedDict):
                 if key == "state_dict":
                     weights_to_parse = value
@@ -243,12 +240,13 @@ class PrithviGeoSpatialMAE(nn.Module, IsAttentionFree,
                             weight_loader(buffer, weight)
                             loaded_buffers.append(name)
                         else:
-                            params_list.append((name, weight))
+                            params_list.append(
+                                (f"inference_runner.{name}", weight))
                     break
 
             elif isinstance(value,
                             torch.Tensor):  # To handle WxCDownscalingTask
-                params_list.append((f"model.{key}", value))
+                params_list.append((f"inference_runner.model.{key}", value))
 
         # Load the remaining model parameters
         loader = AutoWeightsLoader(self)

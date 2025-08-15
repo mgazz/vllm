@@ -181,7 +181,7 @@ _EMBEDDING_MODELS = {
     # Technically PrithviGeoSpatialMAE is a model that works on images, both in
     # input and output. I am adding it here because it piggy-backs on embedding
     # models for the time being.
-    "PrithviGeoSpatialMAE": ("prithvi_geospatial_mae", "PrithviGeoSpatialMAE"),
+    "Terratorch": ("terratorch", "Terratorch"),
 }
 
 _CROSS_ENCODER_MODELS = {
