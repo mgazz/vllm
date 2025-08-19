@@ -249,8 +249,7 @@ class Terratorch(nn.Module, IsAttentionFree, SupportsMultiModalWithRawInput):
                 params_list.append((f"inference_runner.model.{key}", value))
 
         # Load the remaining model parameters
-        loader = AutoWeightsLoader(self,
-                                   skip_substrs=['relative_position_index'])
+        loader = AutoWeightsLoader(self)
         autoloaded_weights = loader.load_weights(params_list)
 
         return autoloaded_weights.union(set(loaded_buffers))
