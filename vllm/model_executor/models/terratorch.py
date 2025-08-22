@@ -223,6 +223,8 @@ class Terratorch(nn.Module, IsAttentionFree, SupportsMultiModalWithRawInput):
                 if key == "state_dict":
                     weights_to_parse = value
                     for name, weight in weights_to_parse.items():
+                        name = f"inference_runner.{name}"
+
                         if "pos_embed" in name:
                             continue
 
@@ -240,8 +242,7 @@ class Terratorch(nn.Module, IsAttentionFree, SupportsMultiModalWithRawInput):
                             weight_loader(buffer, weight)
                             loaded_buffers.append(name)
                         else:
-                            params_list.append(
-                                (f"inference_runner.{name}", weight))
+                            params_list.append((name, weight))
                     break
 
             elif isinstance(value,
@@ -249,7 +250,7 @@ class Terratorch(nn.Module, IsAttentionFree, SupportsMultiModalWithRawInput):
                 params_list.append((f"inference_runner.model.{key}", value))
 
         # Load the remaining model parameters
-        loader = AutoWeightsLoader(self)
+        loader = AutoWeightsLoader(self, )
         autoloaded_weights = loader.load_weights(params_list)
 
         return autoloaded_weights.union(set(loaded_buffers))
