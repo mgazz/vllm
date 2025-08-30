@@ -237,8 +237,8 @@ def test_model_tensor_schema(model_arch: str, model_id: str,
                             hf_overrides=hf_overrides_fn,
                             limit_mm_per_prompt=limit_mm_per_prompt,
                             enforce_eager=True,
-                            skip_tokenizer_init=model_info.skip_tokenizer_init,
-                            dtype=model_info.dtype) as vllm_model,
+                            skip_tokenizer_init=model_info.skip_tokenizer_init)
+                as vllm_model,
         ):
             model_config = vllm_model.llm.llm_engine.model_config
             llm_engine = vllm_model.llm.llm_engine
