@@ -516,6 +516,94 @@ async def async_request_openai_embeddings(
         pbar.update(1)
     return output
 
+async def async_request_io_processor_plugin(
+    request_func_input: RequestFuncInput,
+    session: aiohttp.ClientSession,
+    pbar: Optional[tqdm] = None,
+):
+    api_url = request_func_input.api_url
+    assert api_url.endswith("pooling"), (
+        "OpenAI Completions API URL must end with 'pooling'."
+    )
+    input = {
+        "india": {
+            "plugin": "terratorch_segmentation",
+            "image_url": "https://huggingface.co/christian-pinto/Prithvi-EO-2.0-300M-TL-VLLM/resolve/main/India_900498_S2Hand.tif",
+            "indices": [1, 2, 3, 8, 11, 12],
+            "data_format": "url",
+            "out_data_format": "b64_json",
+        },
+        "valencia_url_in_base64_out": {
+            "plugin": "terratorch_segmentation",
+            "image_url": "https://huggingface.co/christian-pinto/Prithvi-EO-2.0-300M-TL-VLLM/resolve/main/valencia_example_2024-10-26.tiff",
+            "data_format": "url",
+            "out_data_format": "b64_json"
+        },
+        "valencia_url_in_path_out": {
+            "plugin": "terratorch_segmentation",
+            "image_url": "https://huggingface.co/christian-pinto/Prithvi-EO-2.0-300M-TL-VLLM/resolve/main/valencia_example_2024-10-26.tiff",
+            "data_format": "url",
+            "out_data_format": "path"
+        },
+        "valencia_path_in_path_out": {
+            "plugin": "terratorch_segmentation",
+            "image_url": "/workspace/valencia.tiff",
+            "data_format": "path",
+            "out_data_format": "path"
+        },
+        "valencia_path_in_base64_out": {
+            "plugin": "terratorch_segmentation",
+            "image_url": "/workspace/valencia.tiff",
+            "data_format": "path",
+            "out_data_format": "b64_json"
+        },
+
+    }
+    input_sel = "india"
+    image_url = input[input_sel]["image_url"]
+    payload = {
+        "model": request_func_input.model_name
+        if request_func_input.model_name
+        else request_func_input.model,
+        "softmax": False,
+        "data": {
+            "data": image_url, 
+            "data_format": input[input_sel]["data_format"],
+            "out_data_format": input[input_sel]["out_data_format"],
+            "image_format": ""
+        },
+    }
+    if "indices" in input[input_sel]:
+        payload["data"]["indices"] = input[input_sel]["indices"]
+
+    headers = {"Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}"}
+    if request_func_input.request_id:
+        headers["x-request-id"] = request_func_input.request_id
+    
+    output = RequestFuncOutput()
+    st = time.perf_counter()
+    output.start_time = st
+    try:
+        async with session.post(
+            url=api_url,
+            headers=headers,
+            json=payload
+        ) as response:
+            if response.status == 200:
+                output.latency = time.perf_counter() - st
+                output.success = True
+                output.generated_text = ""
+            else:
+                output.success = False
+                output.error = response.reason or ""
+    except Exception as e:
+        output.success = False
+        output.error = str(e)
+
+    if pbar:
+        pbar.update(1)
+    return output
+
 
 # TODO: Add more request functions for different API protocols.
 ASYNC_REQUEST_FUNCS: dict[str, RequestFunc] = {
@@ -524,6 +612,7 @@ ASYNC_REQUEST_FUNCS: dict[str, RequestFunc] = {
     "openai-chat": async_request_openai_chat_completions,
     "openai-audio": async_request_openai_audio,
     "openai-embeddings": async_request_openai_embeddings,
+    "io-processor-plugin": async_request_io_processor_plugin
 }
 
 OPENAI_COMPATIBLE_BACKENDS = [

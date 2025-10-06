@@ -1656,18 +1656,22 @@ class CustomDataset(BenchmarkDataset):
                 break
             prompt = item["prompt"]
 
-            # apply template
-            if not skip_chat_template:
-                prompt = tokenizer.apply_chat_template(
-                    [{
-                        "role": "user",
-                        "content": prompt
-                    }],
-                    add_generation_prompt=True,
-                    tokenize=False,
-                )
+            if tokenizer is None:
+                prompt_len = 1
+            else:
 
-            prompt_len = len(tokenizer(prompt).input_ids)
+                # apply template
+                if not skip_chat_template:
+                    prompt = tokenizer.apply_chat_template(
+                        [{
+                            "role": "user",
+                            "content": prompt
+                        }],
+                        add_generation_prompt=True,
+                        tokenize=False,
+                    )
+
+                prompt_len = len(tokenizer(prompt).input_ids)
             sampled_requests.append(
                 SampleRequest(
                     prompt=prompt,
