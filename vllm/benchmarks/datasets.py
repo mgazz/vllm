@@ -235,9 +235,8 @@ class BenchmarkDataset(ABC):
 
         if len(requests) < num_requests:
             random.seed(self.random_seed)
-            additional = deepcopy(
-                random.choices(requests, k=num_requests - len(requests))
-            )
+            copies= random.choices(requests, k=num_requests - len(requests))
+            additional = [deepcopy(choice) for choice in copies]
             for i in range(len(additional)):
                 req = additional[i]
                 req.request_id = request_id_prefix + str(len(requests) + i)
