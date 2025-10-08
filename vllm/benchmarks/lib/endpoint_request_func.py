@@ -525,56 +525,11 @@ async def async_request_io_processor_plugin(
     assert api_url.endswith("pooling"), (
         "OpenAI Completions API URL must end with 'pooling'."
     )
-    input = {
-        "india": {
-            "plugin": "terratorch_segmentation",
-            "image_url": "https://huggingface.co/christian-pinto/Prithvi-EO-2.0-300M-TL-VLLM/resolve/main/India_900498_S2Hand.tif",
-            "indices": [1, 2, 3, 8, 11, 12],
-            "data_format": "url",
-            "out_data_format": "b64_json",
-        },
-        "valencia_url_in_base64_out": {
-            "plugin": "terratorch_segmentation",
-            "image_url": "https://huggingface.co/christian-pinto/Prithvi-EO-2.0-300M-TL-VLLM/resolve/main/valencia_example_2024-10-26.tiff",
-            "data_format": "url",
-            "out_data_format": "b64_json"
-        },
-        "valencia_url_in_path_out": {
-            "plugin": "terratorch_segmentation",
-            "image_url": "https://huggingface.co/christian-pinto/Prithvi-EO-2.0-300M-TL-VLLM/resolve/main/valencia_example_2024-10-26.tiff",
-            "data_format": "url",
-            "out_data_format": "path"
-        },
-        "valencia_path_in_path_out": {
-            "plugin": "terratorch_segmentation",
-            "image_url": "/workspace/valencia.tiff",
-            "data_format": "path",
-            "out_data_format": "path"
-        },
-        "valencia_path_in_base64_out": {
-            "plugin": "terratorch_segmentation",
-            "image_url": "/workspace/valencia.tiff",
-            "data_format": "path",
-            "out_data_format": "b64_json"
-        },
+    payload =request_func_input.prompt
+    payload["model"] = request_func_input.model_name \
+        if request_func_input.model_name else request_func_input.model
 
-    }
-    input_sel = "india"
-    image_url = input[input_sel]["image_url"]
-    payload = {
-        "model": request_func_input.model_name
-        if request_func_input.model_name
-        else request_func_input.model,
-        "softmax": False,
-        "data": {
-            "data": image_url, 
-            "data_format": input[input_sel]["data_format"],
-            "out_data_format": input[input_sel]["out_data_format"],
-            "image_format": ""
-        },
-    }
-    if "indices" in input[input_sel]:
-        payload["data"]["indices"] = input[input_sel]["indices"]
+    payload["softmax"] = False
 
     headers = {"Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}"}
     if request_func_input.request_id:
