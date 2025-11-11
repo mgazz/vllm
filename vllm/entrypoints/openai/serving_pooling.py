@@ -125,8 +125,11 @@ class OpenAIServingPooling(OpenAIServing):
 
                 validated_prompt = self.io_processor.parse_request(request)
 
-                engine_prompts = await self.io_processor.pre_process_async(
-                    prompt=validated_prompt, request_id=request_id)
+                if not hasattr(self, 'engine_prompts'):
+                    self.engine_prompts = \
+                        await self.io_processor.pre_process_async(
+                            prompt=validated_prompt, request_id=request_id)
+                engine_prompts = self.engine_prompts
 
             elif isinstance(request, PoolingChatRequest):
                 (
@@ -197,10 +200,14 @@ class OpenAIServingPooling(OpenAIServing):
 
         if is_io_processor_request:
             assert self.io_processor is not None
-            output = await self.io_processor.post_process_async(
-                model_output=result_generator,
-                request_id=request_id,
-            )
+            if not hasattr(self, 'output'):
+                self.output = await self.io_processor.post_process_async(
+                    model_output=result_generator,
+                    request_id=request_id,
+                )
+            else:
+                _ = [(i, item) async for i, item in result_generator]
+            output = self.output
             return self.io_processor.output_to_response(output)
 
         assert isinstance(request,

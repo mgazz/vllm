@@ -28,6 +28,7 @@ from terratorch.vllm import (DummyDataGenerator, InferenceRunner,
 from transformers import BatchFeature
 
 from vllm.config import VllmConfig
+from vllm.logger import init_logger
 from vllm.model_executor.layers.pooler import DispatchPooler, Pooler
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 from vllm.model_executor.models.utils import AutoWeightsLoader
@@ -47,6 +48,8 @@ from vllm.sequence import IntermediateTensors
 from .interfaces import (IsAttentionFree, MultiModalEmbeddings,
                          SupportsMultiModal)
 from .interfaces_base import default_pooling_type
+
+logger = init_logger(__name__)
 
 
 def _terratorch_field_names(pretrained_cfg: dict):
@@ -248,6 +251,7 @@ class Terratorch(nn.Module, IsAttentionFree, SupportsMultiModal):
         inputs_embeds: Optional[torch.Tensor] = None,
         **kwargs: object,
     ):
+        logger.info("batch_shape: %s", kwargs['pixel_values'].shape)
         model_output = self.inference_runner.forward(**kwargs)
 
         return model_output.output
