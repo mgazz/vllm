@@ -1935,16 +1935,17 @@ class CustomDataset(BenchmarkDataset):
             if len(sampled_requests) >= num_requests:
                 break
             prompt = item["prompt"]
-
+            if tokenizer is None:
+                prompt_len = 1
             # apply template
-            if not skip_chat_template:
+            elif not skip_chat_template:
                 prompt = tokenizer.apply_chat_template(
                     [{"role": "user", "content": prompt}],
                     add_generation_prompt=True,
                     tokenize=False,
                 )
 
-            prompt_len = len(tokenizer(prompt).input_ids)
+                prompt_len = len(tokenizer(prompt).input_ids)
             sampled_requests.append(
                 SampleRequest(
                     prompt=prompt,
@@ -2492,7 +2493,9 @@ class MTBenchDataset(HuggingFaceDataset):
             prompt = item["turns"][0]
 
             # apply template
-            if not skip_chat_template:
+            if tokenizer is None:
+                prompt_len = 1
+            elif not skip_chat_template:
                 prompt = tokenizer.apply_chat_template(
                     [{"role": "user", "content": prompt}],
                     add_generation_prompt=True,

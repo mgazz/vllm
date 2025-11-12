@@ -138,6 +138,49 @@ def _update_headers_common(
         headers["x-request-id"] = request_func_input.request_id
 
 
+async def async_request_io_processor_plugin(
+    request_func_input: RequestFuncInput,
+    session: aiohttp.ClientSession,
+    pbar: tqdm | None = None,
+):
+    api_url = request_func_input.api_url
+    assert api_url.endswith("pooling"), (
+        "OpenAI Completions API URL must end with 'pooling'."
+    )
+    payload = request_func_input.prompt
+    payload["model"] = (
+        request_func_input.model_name
+        if request_func_input.model_name
+        else request_func_input.model
+    )
+
+    payload["softmax"] = False
+
+    headers = {"Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}"}
+    if request_func_input.request_id:
+        headers["x-request-id"] = request_func_input.request_id
+
+    output = RequestFuncOutput()
+    st = time.perf_counter()
+    output.start_time = st
+    try:
+        async with session.post(url=api_url, headers=headers, json=payload) as response:
+            if response.status == 200:
+                output.latency = time.perf_counter() - st
+                output.success = True
+                output.generated_text = ""
+            else:
+                output.success = False
+                output.error = response.reason or ""
+    except Exception as e:
+        output.success = False
+        output.error = str(e)
+
+    if pbar:
+        pbar.update(1)
+    return output
+
+
 async def async_request_openai_completions(
     request_func_input: RequestFuncInput,
     session: aiohttp.ClientSession,
@@ -761,6 +804,7 @@ ASYNC_REQUEST_FUNCS: dict[str, RequestFunc] = {
     "infinity-embeddings-clip": async_request_infinity_embeddings_clip,
     # (Infinity embedding server does not support vlm2vec)
     "vllm-rerank": async_request_vllm_rerank,
+    "io-processor-plugin": async_request_io_processor_plugin,
 }
 
 OPENAI_COMPATIBLE_BACKENDS = [
