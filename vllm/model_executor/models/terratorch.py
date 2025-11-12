@@ -275,6 +275,7 @@ class Terratorch(nn.Module, IsAttentionFree, SupportsMultiModal):
         inputs_embeds: torch.Tensor | None = None,
         **kwargs: object,
     ):
+        logger.info("batch_shape: %s", kwargs["pixel_values"].shape)
         model_output = self.inference_runner.forward(**kwargs)
 
         return model_output.output
