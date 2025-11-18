@@ -303,14 +303,17 @@ def calculate_metrics(
             output_len = outputs[i].output_tokens
 
             if not output_len:
-                # We use the tokenizer to count the number of output tokens
-                # for some serving backends instead of looking at
-                # len(outputs[i].itl) since multiple output tokens may be
-                # bundled together
-                # Note : this may inflate the output token count slightly
-                output_len = len(
-                    tokenizer(outputs[i].generated_text,
-                              add_special_tokens=False).input_ids)
+                if tokenizer is None:
+                    output_len = len(input_requests)
+                else:
+                    # We use the tokenizer to count the number of output tokens
+                    # for some serving backends instead of looking at
+                    # len(outputs[i].itl) since multiple output tokens may be
+                    # bundled together
+                    # Note : this may inflate the output token count slightly
+                    output_len = len(
+                        tokenizer(outputs[i].generated_text,
+                                add_special_tokens=False).input_ids)
             actual_output_lens.append(output_len)
             total_input += input_requests[i].prompt_len
             tpot = 0
@@ -1070,6 +1073,12 @@ def add_cli_args(parser: argparse.ArgumentParser):
         default="benchmark-serving",
         help="Specify the prefix of request id.",
     )
+    parser.add_argument(
+        "--skip-tokenizer-init",
+        type=bool,
+        default=False,
+        help="Skip initialization of tokenizer and detokenizer",
+    )
 
     sampling_group = parser.add_argument_group("sampling parameters")
     sampling_group.add_argument(
@@ -1192,8 +1201,12 @@ async def main_async(args: argparse.Namespace) -> dict[str, Any]:
     label = args.label
     model_id = args.model
     model_name = args.served_model_name
-    tokenizer_id = args.tokenizer if args.tokenizer is not None else args.model
-    tokenizer_mode = args.tokenizer_mode
+    if args.skip_tokenizer_init:
+        tokenizer_id = None
+        tokenizer_mode = None
+    else:
+        tokenizer_id = args.tokenizer if args.tokenizer is not None else args.model
+        tokenizer_mode = args.tokenizer_mode
 
     if args.base_url is not None:
         api_url = f"{args.base_url}{args.endpoint}"
@@ -1214,10 +1227,12 @@ async def main_async(args: argparse.Namespace) -> dict[str, Any]:
                 raise ValueError(
                     "Invalid header format. Please use KEY=VALUE format.")
 
-    tokenizer = get_tokenizer(tokenizer_id,
-                              tokenizer_mode=tokenizer_mode,
-                              trust_remote_code=args.trust_remote_code)
-
+    if tokenizer_id:
+        tokenizer = get_tokenizer(tokenizer_id,
+                                tokenizer_mode=tokenizer_mode,
+                                trust_remote_code=args.trust_remote_code)
+    else:
+        tokenizer = None
     if args.dataset_name is None:
         raise ValueError(
             "Please specify '--dataset-name' and the corresponding "
