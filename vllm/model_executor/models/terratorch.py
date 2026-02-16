@@ -17,6 +17,7 @@
 # limitations under the License.
 """Wrapper around `Terratorch` models"""
 
+import time
 from collections import OrderedDict
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
@@ -269,7 +270,10 @@ class Terratorch(nn.Module, IsAttentionFree, SupportsMultiModal):
         input_len = length_from_prompt_token_ids_or_embeds(input_ids, inputs_embeds)
 
         batched_kwargs = {k: v.unsqueeze(0) for k, v in kwargs.items()}
+        tic = time.perf_counter()
         model_output = self.inference_runner.forward(**batched_kwargs).output
+        toc = time.perf_counter()
+        logger.info("time inference: %s", str(toc - tic))
 
         # The leading dimension of hidden states needs to equal input length
         return model_output.expand(

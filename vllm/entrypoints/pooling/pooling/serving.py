@@ -89,6 +89,7 @@ class OpenAIServingPooling(OpenAIServing):
 
         request_id = f"pool-{self._base_request_id(raw_request)}"
         created_time = int(time.time())
+        logger.info("request arrived %s, id: %s", time.time(), request_id)
 
         is_io_processor_request = isinstance(request, IOProcessorRequest)
         try:
@@ -115,8 +116,13 @@ class OpenAIServingPooling(OpenAIServing):
 
                 validated_prompt = self.io_processor.parse_request(request)
 
+                tic = time.perf_counter()
                 engine_prompts = await self.io_processor.pre_process_async(
                     prompt=validated_prompt, request_id=request_id
+                )
+                toc = time.perf_counter()
+                logger.info(
+                    "time for pre_process: %s - id: %s", str(toc - tic), request_id
                 )
                 if not isinstance(engine_prompts, Sequence) or isinstance(
                     engine_prompts, (str, bytes, bytearray)
@@ -225,9 +231,14 @@ class OpenAIServingPooling(OpenAIServing):
 
         if is_io_processor_request:
             assert self.io_processor is not None
+            tic = time.perf_counter()
             output = await self.io_processor.post_process_async(
                 model_output=result_generator,
                 request_id=request_id,
+            )
+            toc = time.perf_counter()
+            logger.info(
+                "time for post_process: %s - id: %s", str(toc - tic), request_id
             )
             return self.io_processor.output_to_response(output)
 
