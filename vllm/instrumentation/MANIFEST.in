@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+
+# Include documentation files
+include README.md
+include LICENSE
+
+# Include Python source files
+recursive-include vllm/instrumentation *.py
+
+# Exclude compiled Python files
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude __pycache__
+
+# Exclude development and test files
+exclude .gitignore
+exclude .coveragerc
+recursive-exclude tests *
+recursive-exclude .github *
