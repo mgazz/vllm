@@ -4,7 +4,7 @@
 import asyncio
 import json
 import time
-from collections.abc import AsyncGenerator, Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from functools import partial
 from typing import Final, Literal, cast
 
@@ -38,6 +38,7 @@ from vllm.logger import init_logger
 from vllm.outputs import PoolingRequestOutput
 from vllm.renderers.inputs.preprocess import prompt_to_seq
 from vllm.tasks import SupportedTask
+from vllm.tracing import SpanKind, extract_trace_context, instrument_manual
 from vllm.utils.async_utils import merge_async_iterators
 from vllm.utils.serial_utils import EmbedDType, EncodingFormat, Endianness
 
@@ -68,6 +69,139 @@ class OpenAIServingPooling(OpenAIServing):
         self.chat_template = chat_template
         self.chat_template_content_format: Final = chat_template_content_format
         self.trust_request_chat_template = trust_request_chat_template
+
+    async def _io_processor_pre_process(
+        self,
+        request: IOProcessorRequest,
+        request_id: str,
+        trace_headers: Mapping[str, str] | None,
+    ) -> Sequence[EngineInput]:
+        """
+        Pre-process an IOProcessorRequest by parsing data, pre-processing with tracing,
+        and preparing engine inputs.
+        
+        Args:
+            request: The IOProcessorRequest to process
+            request_id: The request ID for logging and tracing
+            trace_headers: Optional trace headers for distributed tracing
+            
+        Returns:
+            Sequence of EngineInput objects ready for the engine
+        """
+        if self.io_processor is None:
+            raise ValueError(
+                "No IOProcessor plugin installed. Please refer "
+                "to the documentation and to the "
+                "'prithvi_geospatial_mae_io_processor' "
+                "offline inference example for more details."
+            )
+
+        validated_prompt = self.io_processor.parse_data(request.data)
+
+        # Only instrument if tracing is enabled (trace_headers is None when disabled)
+        if trace_headers is not None:
+            # Extract trace context for manual instrumentation
+            trace_context = extract_trace_context(trace_headers)
+
+            # Time the pre-processing step
+            start_time_ns = int(time.time() * 1e9)
+            raw_prompts = await self.io_processor.pre_process_async(
+                prompt=validated_prompt, request_id=request_id
+            )
+            end_time_ns = int(time.time() * 1e9)
+
+            # Create span for pre-processing
+            instrument_manual(
+                span_name="io_processor.pre_process",
+                start_time=start_time_ns,
+                end_time=end_time_ns,
+                attributes={
+                    "request_id": request_id,
+                },
+                context=trace_context,
+                kind=SpanKind.INTERNAL,
+            )
+        else:
+            # No tracing, just call pre_process_async
+            raw_prompts = await self.io_processor.pre_process_async(
+                prompt=validated_prompt, request_id=request_id
+            )
+
+        engine_inputs = await self.openai_serving_render.preprocess_cmpl(
+            request,
+            prompt_to_seq(raw_prompts),
+        )
+        
+        return engine_inputs
+
+    async def _io_processor_post_process(
+        self,
+        result_generator: AsyncGenerator[tuple[int, PoolingRequestOutput], None],
+        request_id: str,
+        trace_headers: Mapping[str, str] | None,
+    ) -> IOProcessorResponse:
+        """
+        Post-process IOProcessor output with tracing.
+        
+        Args:
+            result_generator: The async generator of pooling results
+            request_id: The request ID for logging and tracing
+            trace_headers: Optional trace headers for distributed tracing
+            
+        Returns:
+            IOProcessorResponse with the processed output
+        """
+        assert self.io_processor is not None
+
+        # Only instrument if tracing is enabled (trace_headers is None when disabled)
+        if trace_headers is not None:
+            # Extract trace context for manual instrumentation
+            trace_context = extract_trace_context(trace_headers)
+
+            # Time the post-processing step
+            start_time_ns = int(time.time() * 1e9)
+            output = await self.io_processor.post_process_async(
+                result_generator,
+                request_id=request_id,
+            )
+            end_time_ns = int(time.time() * 1e9)
+
+            # Create span for post-processing
+            instrument_manual(
+                span_name="io_processor.post_process",
+                start_time=start_time_ns,
+                end_time=end_time_ns,
+                attributes={
+                    "request_id": request_id,
+                },
+                context=trace_context,
+                kind=SpanKind.INTERNAL,
+            )
+        else:
+            # No tracing, just call post_process_async
+            output = await self.io_processor.post_process_async(
+                result_generator,
+                request_id=request_id,
+            )
+
+        if callable(
+            output_to_response := getattr(
+                self.io_processor, "output_to_response", None
+            )
+        ):
+            logger.warning_once(
+                "`IOProcessor.output_to_response` is deprecated. To ensure "
+                "consistency between offline and online APIs, "
+                "`IOProcessorResponse` will become a transparent wrapper "
+                "around output data from v0.19 onwards.",
+            )
+
+            if hasattr(output, "request_id") and output.request_id is None:
+                output.request_id = request_id  # type: ignore
+
+            return output_to_response(output)  # type: ignore
+
+        return IOProcessorResponse(request_id=request_id, data=output)
 
     async def create_pooling(
         self,
@@ -110,24 +244,17 @@ class OpenAIServingPooling(OpenAIServing):
                     request.task,
                 )
 
+        # Get trace headers early for use in IOProcessor if needed
+        trace_headers = (
+            None
+            if raw_request is None
+            else await self._get_trace_headers(raw_request.headers)
+        )
+
         engine_inputs: Sequence[EngineInput]
         if use_io_processor := isinstance(request, IOProcessorRequest):
-            if self.io_processor is None:
-                raise ValueError(
-                    "No IOProcessor plugin installed. Please refer "
-                    "to the documentation and to the "
-                    "'prithvi_geospatial_mae_io_processor' "
-                    "offline inference example for more details."
-                )
-
-            validated_prompt = self.io_processor.parse_data(request.data)
-
-            raw_prompts = await self.io_processor.pre_process_async(
-                prompt=validated_prompt, request_id=request_id
-            )
-            engine_inputs = await self.openai_serving_render.preprocess_cmpl(
-                request,
-                prompt_to_seq(raw_prompts),
+            engine_inputs = await self._io_processor_pre_process(
+                request, request_id, trace_headers
             )
         elif isinstance(request, PoolingChatRequest):
             error_check_ret = self.openai_serving_render.validate_chat_template(
@@ -175,12 +302,6 @@ class OpenAIServingPooling(OpenAIServing):
                 lora_request=lora_request,
             )
 
-            trace_headers = (
-                None
-                if raw_request is None
-                else await self._get_trace_headers(raw_request.headers)
-            )
-
             generator = self.engine_client.encode(
                 engine_input,
                 pooling_params,
@@ -195,30 +316,9 @@ class OpenAIServingPooling(OpenAIServing):
         result_generator = merge_async_iterators(*generators)
 
         if use_io_processor:
-            assert self.io_processor is not None
-            output = await self.io_processor.post_process_async(
-                result_generator,
-                request_id=request_id,
+            return await self._io_processor_post_process(
+                result_generator, request_id, trace_headers
             )
-
-            if callable(
-                output_to_response := getattr(
-                    self.io_processor, "output_to_response", None
-                )
-            ):
-                logger.warning_once(
-                    "`IOProcessor.output_to_response` is deprecated. To ensure "
-                    "consistency between offline and online APIs, "
-                    "`IOProcessorResponse` will become a transparent wrapper "
-                    "around output data from v0.19 onwards.",
-                )
-
-                if hasattr(output, "request_id") and output.request_id is None:
-                    output.request_id = request_id  # type: ignore
-
-                return output_to_response(output)  # type: ignore
-
-            return IOProcessorResponse(request_id=request_id, data=output)
 
         assert isinstance(request, (PoolingCompletionRequest, PoolingChatRequest))
         num_prompts = len(engine_inputs)
