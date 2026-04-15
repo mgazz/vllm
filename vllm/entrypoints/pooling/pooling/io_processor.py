@@ -41,15 +41,8 @@ class PluginWithIOProcessorPlugins(PoolingIOProcessor):
     #######################################
     # online APIs
 
-    def pre_process_online(self, ctx: PoolingServeContext):
-        assert isinstance(ctx.request, IOProcessorRequest)
-
-        validated_prompt = self.io_processor.parse_data(ctx.request.data)
-
-        raw_prompts = self.io_processor.pre_process(
-            prompt=validated_prompt, request_id=ctx.request_id
-        )
-
+    def _set_engine_inputs_and_params(self, raw_prompts, ctx: PoolingServeContext):
+        """Parse raw prompts, render engine inputs, and set pooling params."""
         parsed_prompts = [
             (
                 prompt
@@ -75,6 +68,26 @@ class PluginWithIOProcessorPlugins(PoolingIOProcessor):
         if pooling_params.task is None:
             pooling_params.task = "plugin"
         ctx.pooling_params = pooling_params
+
+    async def pre_process_online_async(self, ctx: PoolingServeContext):
+        validated_prompt = self.io_processor.parse_data(ctx.request.data)
+
+        raw_prompts = await self.io_processor.pre_process_async(
+            prompt=validated_prompt, request_id=ctx.request_id
+        )
+
+        self._set_engine_inputs_and_params(raw_prompts, ctx)
+
+    def pre_process_online(self, ctx: PoolingServeContext):
+        assert isinstance(ctx.request, IOProcessorRequest)
+
+        validated_prompt = self.io_processor.parse_data(ctx.request.data)
+
+        raw_prompts = self.io_processor.pre_process(
+            prompt=validated_prompt, request_id=ctx.request_id
+        )
+
+        self._set_engine_inputs_and_params(raw_prompts, ctx)
 
     def post_process_online(
         self,
