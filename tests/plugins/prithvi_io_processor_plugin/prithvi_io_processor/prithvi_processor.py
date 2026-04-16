@@ -246,6 +246,14 @@ class PrithviMultimodalDataProcessor(IOProcessor[ImagePrompt, ImageRequestOutput
 
         raise ValueError("Prompt data should be an `ImagePrompt`")
 
+    async def pre_process_async(
+        self,
+        prompt: ImagePrompt,
+        request_id: str | None = None,
+        **kwargs,
+    ) -> PromptType | Sequence[PromptType]:
+        return self.pre_process(prompt, request_id, **kwargs)
+
     def pre_process(
         self,
         prompt: ImagePrompt,
